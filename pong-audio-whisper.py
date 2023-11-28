@@ -140,6 +140,16 @@ def on_receive_paddle_2(address, args, paddle):
     global paddle_2
     paddle_2 = paddle
 
+def on_receive_quit(address, args, b):
+    global quit
+    print("Quitting...")
+    quit = True
+    server_1.shutdown()
+    server_2.shutdown()
+    microphone_thread.join()
+    speech_thread.join()
+    sound_thread.join()
+
 def on_receive_connection_2(address, args, ip):
     global client_2
     global player_2_ip
@@ -176,6 +186,7 @@ dispatcher_1.map("/g", on_receive_game_start, "g")
 dispatcher_1.map("/c", on_receive_connection_1, "c")
 dispatcher_1.map("/b", on_receive_bigpaddle_1, "b")
 dispatcher_1.map("/mp", on_receive_movepaddle_1, "mp")
+dispatcher_1.map("/q", on_receive_quit, "q")
 
 dispatcher_2 = dispatcher.Dispatcher()
 dispatcher_2.map("/p2", on_receive_paddle_2, "p")
@@ -183,7 +194,8 @@ dispatcher_2.map("/l", on_receive_game_level, "l")
 dispatcher_2.map("/g", on_receive_game_start, "g")
 dispatcher_2.map("/c", on_receive_connection_2, "c")
 dispatcher_2.map("/b", on_receive_bigpaddle_2, "b")
-dispatcher_1.map("/mp", on_receive_movepaddle_2, "mp")
+dispatcher_2.map("/mp", on_receive_movepaddle_2, "mp")
+dispatcher_2.map("/q", on_receive_quit, "q")
 # -------------------------------------#
 
 # Player
@@ -336,11 +348,9 @@ import pyaudio
 import wave
 import tempfile
 import soundfile as sf
-import whisper
-from openai import OpenAI
-
-#OPENAI_API_KEY = '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'
-openai = OpenAI(api_key='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')
+from whisper_mic.whisper_mic import WhisperMic
+from typing import Optional
+import openai
 
 # PyAudio object.
 p = pyaudio.PyAudio()
@@ -370,27 +380,21 @@ for i in range(p.get_device_count()):
     dev = p.get_device_info_by_index(i)
     if dev['maxInputChannels'] > 0:
         print(f"Device index {i}: {dev['name']}")
-    
-openai.api_key = os.environ.get('OPENAI_API_KEY')
 
 def listen_to_speech():
     global quit, latest_voice_command
     print("[speech recognition] Thread started")
+    mic = WhisperMic(model="base", english=True, verbose=False, energy=200, pause=0.8, dynamic_energy=True, save_file=False)
     while not quit:
-        r = sr.Recognizer()
-        with sr.Microphone(device_index=0) as source:
-            print("[speech recognition] Say something!")
-            audio = r.listen(source)
-            try:
-                recog_results = r.recognize_whisper_api(audio, api_key='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')
-                latest_voice_command = recog_results.lower()
-                print(f"[speech recognition] Recognized: {latest_voice_command}")
-                speech_processor(latest_voice_command)
-
-            except sr.UnknownValueError:
-                print("[speech recognition] Whisper could not understand audio")
-            except sr.RequestError as e:
-                print(f"[speech recognition] Could not request results from Whisper service; {e}")
+        try:
+            recog_results = mic.listen()
+            latest_voice_command = recog_results.lower()
+            print(f"[speech recognition] Recognized: {latest_voice_command}")
+            speech_processor(latest_voice_command)
+        except sr.UnknownValueError:
+            print("[speech recognition] Whisper could not understand audio")
+        except sr.RequestError as e:
+            print(f"[speech recognition] Could not request results from Whisper service; {e}")
 
 def speech_processor(command):
     global quit
@@ -401,7 +405,7 @@ def speech_processor(command):
     if 'pause' in command:
         client.send_message('/g', 0)
     if 'quit' in command:
-        exit(0)
+        client.send_message('/q', 0)
     if 'level one' in command:
         client.send_message('/l', 1)
     elif 'level two' in command:
@@ -417,7 +421,7 @@ def speech_processor(command):
                 client.send_message('/p2', int(num))
                 break
     if 'power' in command:
-        client.send_message('/b')
+        client.send_message('/b',0)
     if 'up' in command:
         client.send_message('/mp',-1)
     elif 'down' in command:
@@ -434,22 +438,23 @@ def sense_microphone():
     global quit
     global paddle_1, paddle_2, mode
     global debug
-    while not quit:
-        data = stream.read(1024,exception_on_overflow=False)
-        samples = num.frombuffer(data,
-            dtype=aubio.float_type)
+    
+    data = stream.read(1024,exception_on_overflow=False)
+    samples = num.frombuffer(data,
+        dtype=aubio.float_type)
 
         # Compute the pitch of the microphone input
-        pitch = pDetection(samples)[0]
+    pitch = pDetection(samples)[0]
         # Compute the energy (volume) of the mic input
-        volume = num.sum(samples**2)/len(samples)
+    volume = num.sum(samples**2)/len(samples)
         # Format the volume output so that at most
         # it has six decimal numbers.
-        volume = "{:.6f}".format(volume)
+    volume = "{:.6f}".format(volume)
         # uncomment these lines if you want pitch or volume
-        if debug:
-            print("pitch "+str(pitch)+" volume "+str(volume))
+    if debug:
+        print("pitch "+str(pitch)+" volume "+str(volume))
 # -------------------------------------#
+
 # Host game mechanics: no need to change below
 class Ball(object):
 
@@ -581,9 +586,9 @@ class Model(object):
         cross0 = (b.x < p0.x + 2*b.TO_SIDE) and (b.x_old >= p0.x + 2*b.TO_SIDE)
         cross1 = (b.x > p1.x - 2*b.TO_SIDE) and (b.x_old <= p1.x - 2*b.TO_SIDE)
         if p1_activated == 1 and power_up_type == 3:
-            bounding_1 = 25 * 4
+            bounding_1 = 25 * 6
         else: 
-            bounding_1 = 25
+            bounding_1 = 25 * 4
         if cross0 and -bounding_1 < b.y - p0.y < bounding_1:
             hit()
             if (client_1 != None):
@@ -598,9 +603,9 @@ class Model(object):
             b.vec_x = (1**2 - b.vec_y**2) ** 0.5
         else: 
             if p2_activated == 1 and power_up_type == 4:
-                bounding = 25 * 4
+                bounding = 25 * 6
             else: 
-                bounding = 25
+                bounding = 25 * 4
             if cross1 and -bounding < b.y - p1.y < bounding:
                 hit()
                 if (client_1 != None):
@@ -714,22 +719,22 @@ class Model(object):
                     p1.y = paddle_1
                     paddle_1 = 0
                 if p1.up_key in pks and p1.down_key not in pks: 
-                    p1.y -= self.speed
+                    p1.y -= (1.5*self.speed)
                 elif p1.up_key not in pks and p1.down_key in pks: 
-                    p1.y += self.speed
+                    p1.y += (1.5*self.speed)
             
             if power_up_type == 1:
                 pass
             else: 
                 if paddle_1_direction == -1:
-                    if p1.y - self.speed > 0:
-                        p1.y -= self.speed
+                    if p1.y - (1.5*self.speed) > 0:
+                        p1.y -= (1.5*self.speed)
                     else:
                         paddle_1_direction = 0
                         client_1.send_message("/p1limit", 0)
                 if paddle_1_direction == 1:
-                    if p1.y + self.speed < 675:
-                        p1.y += self.speed
+                    if p1.y + (1.5*self.speed) < 675:
+                        p1.y += (1.5*self.speed)
                     else:
                         paddle_1_direction = 0
 
@@ -740,22 +745,22 @@ class Model(object):
                     p2.y = paddle_2
                     paddle_2 = 0
                 if p2.up_key in pks and p2.down_key not in pks:
-                    p2.y -= self.speed
+                    p2.y -= (1.5*self.speed)
                 elif p2.up_key not in pks and p2.down_key in pks:
-                    p2.y += self.speed
+                    p2.y += (1.5*self.speed)
             
             if power_up_type == 1:
                 pass
             else: 
                 if paddle_2_direction == -1:
-                    if p2.y - self.speed > 0:
-                        p2.y -= self.speed
+                    if p2.y - (1.5*self.speed) > 0:
+                        p2.y -= (1.5*self.speed)
                     else:
                         paddle_2_direction = 0
                         client_2.send_message("/p2limit", 0)
                 if paddle_2_direction == 1:
-                    if p2.y + self.speed < 675:
-                        p2.y += self.speed
+                    if p2.y + (1.5*self.speed) < 675:
+                        p2.y += (1.5*self.speed)
                     else:
                         paddle_2_direction = 0
 
@@ -904,6 +909,9 @@ class Window(pyglet.window.Window):
 
     def on_key_press(self, symbol, modifiers):
         self.controller.on_key_press(symbol, modifiers)
+    
+    def on_close(self):
+        pyglet.app.exit()
 
     def update(self, *args, **kwargs):
         global last_power_up
@@ -911,12 +919,16 @@ class Window(pyglet.window.Window):
         global power_up_type
         global p1_activated
         global p2_activated
+        global quit
         # make more efficient (save last position, draw black square
         # over that and the new square, don't redraw _entire_ frame.)
         self.clear()
         self.controller.update()
         
         self.model.menu = game_start
+
+        if quit:
+            self.close()
 
         if (game_start == 1):
             self.model.paused = False
@@ -1000,7 +1012,7 @@ if mode == 'host':
     sound_thread.start()
     window = Window()
     pyglet.app.run()
-
+    
 # Player
 if mode == 'p1':
     player_port = player_1_port

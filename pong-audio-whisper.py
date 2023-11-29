@@ -42,6 +42,7 @@ from pythonosc import udp_client
 mode = ''
 debug = False
 quit = False
+window = None
 
 host_ip = "127.0.0.1"
 host_port_1 = 5005 # you are player 1 if you talk to this port
@@ -113,7 +114,7 @@ def on_receive_game_level(address, args, l):
         client_2.send_message("/level", l)
 
 def on_receive_game_start(address, args, g):
-    global game_start
+    global game_start, pause
     game_start = g
 
 def on_receive_paddle_1(address, args, paddle):
@@ -202,6 +203,7 @@ dispatcher_2.map("/q", on_receive_quit, "q")
 # TODO: add audio output here so that you can play the game eyes-free
 # -------------------------------------#
 #play some fun sounds?
+
 def hit():
     playsound('hit.wav', False)
 
@@ -211,47 +213,47 @@ def bounce():
 def paddle_limit():
     playsound('limit.wav', False)
 
+def sound_manager():
+    global game_start, snd, instructions
+    if game_start == 1:
+        if not snd.isPlaying():
+            snd.out()
+        instructions.stop()
+    elif game_start == 2:
+        if not instructions.isPlaying():
+            instructions.out()
+        snd.stop()
+    else:
+        snd.stop()
+        instructions.stop()
+
 def update_sound(ball_x, ball_y, max_x, max_y):
-    global snd_left, snd_right
-    max_freq = 1200
-    min_freq = 50
+    global snd_left, snd_right, snd
+    max_freq = 1000
+    min_freq = 100
     freq = min_freq + ((max_y - ball_y) / max_y) * (max_freq - min_freq)
-    snd_left.freq = freq
-    snd_right.freq = freq
+    print(freq)
+    '''snd_left.freq = freq
+    snd_right.freq = freq'''
+    snd.freq = freq
     pan = ball_x / max_x
-    snd_left.mul = 1 - pan
-    snd_right.mul = pan
-
-'''def update_pitch(y_position):
-    global snd_left, snd_right
-    max_freq = 880
-    min_freq = 200
-    max_y = 450
-    new_freq = min_freq + ((max_y - y_position) / max_y) * (max_freq - min_freq)
-    snd_left.setFreq(new_freq)
-    snd_right.setFreq(new_freq)
-
-def update_pan(x_position, max_x):
-    global snd_left, snd_right
-    pan_value = x_position / max_x
-    left_vol = 1 - pan_value
-    right_vol = pan_value
-
-    snd_left.setMul(left_vol)
-    snd_right.setMul(right_vol)'''
+    '''snd_left.mul = 1 - pan
+    snd_right.mul = pan'''
 
 def play_continuous_sound():
-    global snd_left, snd_right, quit
-    s = Server(nchnls=1).boot()
+    print("[Sound Manager] Thread started")
+    s = Server().boot()
     s.start()
-    snd_left = Sine(freq=440, mul=0.5).out(chnl=0)
-    snd_right = Sine(freq=440, mul=0.5).out(chnl=1)
-
+    global snd_left, snd_right, game_start, quit, snd, instructions
+    snd = Sine(freq=440, mul=0.5)
+    instructions = SfPlayer('instructions.wav', loop=False)
     while not quit:
-        time.sleep(0.01)
+        try:
+            sound_manager()
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"[Sound Manager] Error: {e}")
     s.stop()
-
-# used to send messages to host
 
 if mode == 'p1':
     host_port = host_port_1
@@ -302,6 +304,9 @@ def on_receive_powerup(address, *args):
     # 3 - adds a big paddle to p1, not use
     # 4 - adds a big paddle to p2, not use
 
+def on_receive_instructions(address, *args):
+    pass
+
 def on_receive_p1_limit(address, *args):
     print("p1's paddle hit the limit of screen")
     paddle_limit()
@@ -331,6 +336,8 @@ dispatcher_player.map("/p2limit", on_receive_p2_limit)
 dispatcher_player.map("/powerup", on_receive_powerup)
 dispatcher_player.map("/p1bigpaddle", on_receive_p1_bigpaddle)
 dispatcher_player.map("/p2bigpaddle", on_receive_p2_bigpaddle)
+dispatcher_player.map("/p2bigpaddle", on_receive_p2_bigpaddle)
+dispatcher_player.map("/instructions", on_receive_instructions)
 # -------------------------------------#
 
 # Player: speech recognition library
@@ -375,16 +382,16 @@ recognizer = sr.Recognizer()
 # Player: speech recognition functions using google api
 # TODO: you can use this for input, add function like "client.send_message()" to control the host game
 # -------------------------------------#
-print("Available audio input devices:")
+'''print("Available audio input devices:")
 for i in range(p.get_device_count()):
     dev = p.get_device_info_by_index(i)
     if dev['maxInputChannels'] > 0:
-        print(f"Device index {i}: {dev['name']}")
+        print(f"Device index {i}: {dev['name']}")'''
 
 def listen_to_speech():
     global quit, latest_voice_command
     print("[speech recognition] Thread started")
-    mic = WhisperMic(model="base", english=True, verbose=False, energy=200, pause=0.8, dynamic_energy=True, save_file=False)
+    mic = WhisperMic(model="base", english=True, verbose=False, energy=200, pause=0.5, dynamic_energy=True, save_file=False)
     while not quit:
         try:
             recog_results = mic.listen()
@@ -403,6 +410,8 @@ def speech_processor(command):
     if 'start' in command or 'play' in command:
         client.send_message('/g', 1)
     if 'pause' in command:
+        client.send_message('/g', 0)
+    if 'menu' in command:
         client.send_message('/g', 0)
     if 'quit' in command:
         client.send_message('/q', 0)
@@ -428,6 +437,8 @@ def speech_processor(command):
         client.send_message('/mp', 1)
     elif 'stop' in command:
         client.send_message('/mp', 0)
+    if 'instructions' in command or 'help' in command:
+        client.send_message('/g',2)
 
 # -------------------------------------#
 
@@ -503,11 +514,12 @@ class Model(object):
         self.level_1_key = pyglet.window.key._1
         self.level_2_key = pyglet.window.key._2
         self.level_3_key = pyglet.window.key._3
+        self.instructions_key = pyglet.window.key.I
         self.speed = 4  # in pixels per frame
         self.ball_speed = self.speed #* 2.5
         self.WIDTH, self.HEIGHT = DIMENSIONS
         # STATE VARS
-        self.menu = 0 # 0: menu, 1: game
+        self.menu = 0 # 0: menu, 1: game, 2: instructions
         self.level = 1
         self.paused = True
         self.i = 0  # "frame count" for debug
@@ -631,7 +643,7 @@ class Model(object):
         """
         global client_1
         global client_2
-        global snd_left, snd_right
+        global snd_left, snd_right, snd
         self.i += 1  # "debug"
         b = self.ball
         b.x_old, b.y_old = b.x, b.y
@@ -644,7 +656,7 @@ class Model(object):
             client_1.send_message("/ball", [b.x, b.y])
         if (client_2 != None):
             client_2.send_message("/ball", [b.x, b.y])
-        if snd_left is not None and snd_right is not None:
+        if snd is not None:
             update_sound(self.ball.x, self.ball.y, self.WIDTH, self.HEIGHT)
 
     def toggle_menu(self):
@@ -657,6 +669,17 @@ class Model(object):
             self.menu = 1
             game_start = 1
             self.paused = False
+    
+    def toggle_instructions(self):
+        global game_start
+        if self.menu != 2:
+            self.menu = 2
+            game_start = 2
+            self.paused = True
+        else:
+            self.menu = 0
+            game_start = 0
+            self.paused = False
 
     def update(self):
         """Work through all pressed keys, update and call update_ball."""
@@ -664,7 +687,7 @@ class Model(object):
         global paddle_2, paddle_2_direction
         global p1_activated
         global p2_activated
-        global snd_left, snd_right, game_start
+        global snd_left, snd_right
         # you can change these to voice input too
         pks = self.pressed_keys
         if quit:
@@ -674,6 +697,9 @@ class Model(object):
         if self.menu_key in pks:
             self.toggle_menu()
             pks.remove(self.menu_key) # debounce: get rid of quick duplicated presses
+        if self.instructions_key in pks:
+            self.toggle_instructions()
+            pks.remove(self.instructions_key)
 
         if self.p1activate_key in pks:
             # print("E pressed to send power up on 1")
@@ -727,14 +753,14 @@ class Model(object):
                 pass
             else: 
                 if paddle_1_direction == -1:
-                    if p1.y - (1.5*self.speed) > 0:
-                        p1.y -= (1.5*self.speed)
+                    if p1.y - self.speed > 0:
+                        p1.y -= self.speed
                     else:
                         paddle_1_direction = 0
                         client_1.send_message("/p1limit", 0)
                 if paddle_1_direction == 1:
-                    if p1.y + (1.5*self.speed) < 675:
-                        p1.y += (1.5*self.speed)
+                    if p1.y + self.speed < 675:
+                        p1.y += self.speed
                     else:
                         paddle_1_direction = 0
 
@@ -753,14 +779,14 @@ class Model(object):
                 pass
             else: 
                 if paddle_2_direction == -1:
-                    if p2.y - (1.5*self.speed) > 0:
-                        p2.y -= (1.5*self.speed)
+                    if p2.y - self.speed > 0:
+                        p2.y -= self.speed
                     else:
                         paddle_2_direction = 0
                         client_2.send_message("/p2limit", 0)
                 if paddle_2_direction == 1:
-                    if p2.y + (1.5*self.speed) < 675:
-                        p2.y += (1.5*self.speed)
+                    if p2.y + self.speed < 675:
+                        p2.y += self.speed
                     else:
                         paddle_2_direction = 0
 
@@ -884,6 +910,35 @@ class View(object):
         self.start_label.draw()
         self.level_label.draw()
         self.level_indicator_label.draw()
+    
+    def redraw_instructions(self):
+        window_height = self.w.height
+        instruction_y_start = window_height - 60
+        self.instructions_label = pyglet.text.Label("Instructions", font_name=None, font_size=36, x=self.w.width//2, y=instruction_y_start, anchor_x='center', anchor_y='center', color=(255, 255, 255, 255))
+        self.instructions_label.draw()
+
+        instruction_lines = [
+            "Listen to the pitch to find the y-position of the ball. Pay attention to the stereo sound to find the x-position.",
+            "You will hear sounds when you hit the ball and when the ball bounces on the walls.",
+            "When your paddle is closer to the top of the screen, the ball's frequency will be louder, and vice-versa.",
+            "1. To start the game, say 'start' or 'play'",
+            "2. To pause the game, say 'pause' or 'menu'",
+            "3. To quit the game, say 'quit'",
+            "4. To choose a level, say 'Level + [Level Number]'",
+            "5. To move your paddle continuously, say 'up' or 'down' then 'stop' when you want to stop moving",
+            "6. To move your paddle incrementally, say a number between 1 and 10, 10 being the top",
+            "7. To activate a powerup, say 'power'"
+        ]
+
+        line_height = 20
+        vertical_spacing = 20
+        current_y = instruction_y_start - 60
+
+        for line in instruction_lines:
+            label = pyglet.text.Label(line, font_name=None, font_size=18, x=self.w.width//2, y=current_y, anchor_x='center', anchor_y='center', color=(255, 255, 255, 255))
+            label.draw()
+            current_y -= (line_height + vertical_spacing)
+
 
 class Window(pyglet.window.Window):
 
@@ -909,7 +964,7 @@ class Window(pyglet.window.Window):
 
     def on_key_press(self, symbol, modifiers):
         self.controller.on_key_press(symbol, modifiers)
-    
+
     def on_close(self):
         pyglet.app.exit()
 
@@ -935,7 +990,9 @@ class Window(pyglet.window.Window):
         else:
             self.model.paused = True
 
-        if (self.model.menu == 1):
+        if self.model.menu == 2:
+            self.view2.redraw_instructions()
+        elif self.model.menu == 1:
             self.view2.redraw_game()
             self.score_label.draw()
         else:
@@ -997,6 +1054,16 @@ if mode == 'host':
     # -------------------------------------#
 
 # Host: pygame starts
+if mode == 'host':
+    sound_thread = threading.Thread(target=play_continuous_sound)
+    sound_thread.daemon = True
+    sound_thread.start()
+    '''instructions_thread = threading.Thread(target=instructions_audio)
+    instructions_thread.daemon = True
+    instructions_thread.start()'''
+    window = Window()
+    pyglet.app.run()
+
 if (mode == 'p1') or (mode == 'p2'):
     microphone_thread = threading.Thread(target=sense_microphone, args=())
     microphone_thread.daemon = True
@@ -1006,13 +1073,6 @@ if (mode == 'p1') or (mode == 'p2'):
     speech_thread.daemon = True
     speech_thread.start()
 
-if mode == 'host':
-    sound_thread = threading.Thread(target=play_continuous_sound)
-    sound_thread.daemon = True
-    sound_thread.start()
-    window = Window()
-    pyglet.app.run()
-    
 # Player
 if mode == 'p1':
     player_port = player_1_port

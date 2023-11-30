@@ -33,6 +33,7 @@ import sys
 from playsound import playsound
 import argparse
 from pyo import *
+from pysinewave import SineWave
 import threading
 
 from pythonosc import osc_server
@@ -42,7 +43,9 @@ from pythonosc import udp_client
 mode = ''
 debug = False
 quit = False
-window = None
+pause = True
+sine_pitch = 0
+sine_pan = 0
 
 host_ip = "127.0.0.1"
 host_port_1 = 5005 # you are player 1 if you talk to this port
@@ -60,9 +63,8 @@ paddle_1 = 225
 paddle_2 = 225
 paddle_1_direction = 0
 paddle_2_direction = 0
-snd_left = None
-snd_right = None
-
+volume = 0
+sine_wave = None
 # store how many powerups each player has
 p1_activated = 0
 p2_activated = 0
@@ -97,6 +99,8 @@ if __name__ == '__main__' :
         player_port = args.player_port
     if (args.debug):
         debug = True
+    s = Server().boot()
+    s.start()
 
 # Host
 # -------------------------------------#
@@ -115,7 +119,22 @@ def on_receive_game_level(address, args, l):
 
 def on_receive_game_start(address, args, g):
     global game_start, pause
+    if game_start == 2 and g != 2:
+        if (client_1 != None):
+            client_1.send_message("/instructionsclose", 0)
+        if (client_2 != None):
+            client_2.send_message("/instructionsclose", 0)
     game_start = g
+    if game_start == 2:
+        pause = True
+        if (client_1 != None):
+            client_1.send_message("/instructions", 0)
+        if (client_2 != None):
+            client_2.send_message("/instructions", 0)
+    if game_start == 0:
+        pause = True
+    if game_start == 1:
+        pause = False
 
 def on_receive_paddle_1(address, args, paddle):
     global paddle_1
@@ -149,7 +168,7 @@ def on_receive_quit(address, args, b):
     server_2.shutdown()
     microphone_thread.join()
     speech_thread.join()
-    sound_thread.join()
+    sine_thread.join()
 
 def on_receive_connection_2(address, args, ip):
     global client_2
@@ -203,6 +222,8 @@ dispatcher_2.map("/q", on_receive_quit, "q")
 # TODO: add audio output here so that you can play the game eyes-free
 # -------------------------------------#
 #play some fun sounds?
+s = Server().boot()
+s.start()
 
 def hit():
     playsound('hit.wav', False)
@@ -213,55 +234,57 @@ def bounce():
 def paddle_limit():
     playsound('limit.wav', False)
 
-def sound_manager():
-    global game_start, snd, instructions
-    if game_start == 1:
-        if not snd_left.isPlaying():
-            snd_left.out()
-            snd_right.out(1)
-        instructions.stop()
-    elif game_start == 2:
-        if not instructions.isPlaying():
-            instructions.out()
-        snd_left.stop()
-        snd_right.stop()
+def wii_groan():
+    playsound('wii_groan.mp3', False)
+
+def power_available(power):
+    if power < 3:
+        playsound('freeze_ray.wav', False)
     else:
-        snd_left.stop()
-        snd_right.stop()
-        instructions.stop()
+        playsound('power_available.wav', False)
 
-def update_sound(ball_x, ball_y, max_x, max_y):
-    global snd_left, snd_right, paddle_1, paddle_2
-    print(freq)
-    max_freq = 880
-    min_freq = 100
-    freq = min_freq + ((max_y - ball_y) / max_y) * (max_freq - min_freq)
-    snd_left.freq = freq
-    snd_right.freq = freq
-    pan = ball_x / max_x
-    snd_left.mul = 1 - pan
-    snd_right.mul = pan
+def level_sound(level):
+    if level == 1:
+        playsound('level_1.mp3', False)
+    elif level == 2:
+        playsound('level_2.mp3', False)
+    else:
+        playsound('level_3.mp3', False)
 
-    volume = 0.5 + (ball_y / max_y) * 0.5
-    snd_left.mul *= volume
-    snd_right.mul *= volume
+def instructions():
+    playsound('instructions.wav')
 
-def play_continuous_sound():
-    print("[Sound Manager] Thread started")
-    print("Player port: " + str(player_port))
-    s = Server().boot()
-    s.start()
-    global snd_left, snd_right, game_start, quit, snd, instructions
-    snd_left = Sine(freq=440, mul=0.5)
-    snd_right = Sine(freq=440, mul=0.5)
-    instructions = SfPlayer('instructions.wav', loop=False)
-    while not quit:
-        try:
-            sound_manager()
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"[Sound Manager] Error: {e}")
-    s.stop()
+def power_sound(player):
+    if player == 1:
+        playsound('p1_power.mp3', False)
+    elif player == 2:
+        playsound('p2_power.mp3', False)
+
+def sine_wave():
+    global paddle_1, paddle_2, game_start, cont_sound_playing, sine_pitch, sine_pan, sine_wave
+    sine_wave = SineWave(pitch = sine_pitch, pitch_per_second=10, channels=2)
+    volume = 0.5
+    sine_wave.set_volume(volume)
+    if sine_pan == 0:
+        sine_wave.channel_side = -1
+    elif sine_pan == 1:
+        sine_wave.channel_side = 0
+    else:
+        sine_wave.channel_side = 1
+    sine_wave.play()
+
+def update_sinewave():
+    global sine_wave, sine_pan, sine_pitch
+    sine_wave.pitch = sine_pitch
+    sine_wave.channel_side = 1
+    sine_wave.set_pitch(sine_pitch)
+    if mode == 'p1':
+        volume = 0.5 + (paddle_1 / 675) * 0.5
+    elif mode == 'p2':
+        volume = 0.5 + (paddle_1 / 675) * 0.5
+    else:
+        volume = 0.5
+    sine_wave.set_volume(volume)
 
 if mode == 'p1':
     host_port = host_port_1
@@ -274,15 +297,26 @@ if (mode == 'p1') or (mode == 'p2'):
 
 # functions receiving messages from host
 def on_receive_ball(address, *args):
+    global sine_pitch, sine_pan
+    max_pitch = 15
+    min_pitch = -5
+    pitch = min_pitch + ((675 - args[1]) / 675) * (max_pitch - min_pitch)
+    if args[0] < 320:
+        pan = -1
+    elif 320 <= args[0] <= 355:
+        pan = 0
+    elif 355 < args[0]:
+        pan = 1
+    sine_pan = pan
+    sine_pitch = pitch
+    update_sinewave()
     # print("> ball position: (" + str(args[0]) + ", " + str(args[1]) + ")")
-    pass
 
 def on_receive_paddle(address, *args):
     #print("> paddle position: (" + str(args[0]) + ", " + str(args[1]) + ")")
     pass
 
 def on_receive_hitpaddle(address, *args):
-    # example sound
     hit()
     #print("> ball hit at paddle " + str(args[0]) )
     pass
@@ -292,7 +326,6 @@ def on_receive_ballout(address, *args):
     pass
 
 def on_receive_ballbounce(address, *args):
-    # example sound
     bounce()
     #print("> ball bounced on up/down side: " + str(args[0]) )
 
@@ -301,19 +334,23 @@ def on_receive_scores(address, *args):
     pass
 
 def on_receive_level(address, *args):
-    #print("> level now: " + str(args[0]))
-    pass
+    level_sound(args[0])
 
 def on_receive_powerup(address, *args):
+    power_available(args[0])
     #print("> powerup now: " + str(args[0]))
-    pass
+    
     # 1 - freeze p1
     # 2 - freeze p2
     # 3 - adds a big paddle to p1, not use
     # 4 - adds a big paddle to p2, not use
 
 def on_receive_instructions(address, *args):
-    pass
+    if not instructions_thread.is_alive():
+        instructions_thread.start()
+
+def on_receive_instructions_stop(address, *args):
+    instructions_thread.join()
 
 def on_receive_p1_limit(address, *args):
     print("p1's paddle hit the limit of screen")
@@ -325,10 +362,12 @@ def on_receive_p2_limit(address, *args):
 
 def on_receive_p1_bigpaddle(address, *args):
     print("> p1 has a big paddle now")
+    power_sound(1)
     # when p1 activates their big paddle
 
 def on_receive_p2_bigpaddle(address, *args):
     print("> p2 has a big paddle now")
+    power_sound(2)
     # when p2 activates their big paddle
 
 dispatcher_player = dispatcher.Dispatcher()
@@ -344,9 +383,10 @@ dispatcher_player.map("/p2limit", on_receive_p2_limit)
 dispatcher_player.map("/powerup", on_receive_powerup)
 dispatcher_player.map("/p1bigpaddle", on_receive_p1_bigpaddle)
 dispatcher_player.map("/p2bigpaddle", on_receive_p2_bigpaddle)
-dispatcher_player.map("/p2bigpaddle", on_receive_p2_bigpaddle)
+dispatcher_player.map("/p1limit", on_receive_p1_limit)
+dispatcher_player.map("/p2limit", on_receive_p2_limit)
 dispatcher_player.map("/instructions", on_receive_instructions)
-dispatcher_player.map("/continuous_sound", play_continuous_sound)
+dispatcher_player.map("/instructionsclose", on_receive_instructions_stop)
 # -------------------------------------#
 
 # Player: speech recognition library
@@ -665,8 +705,6 @@ class Model(object):
             client_1.send_message("/ball", [b.x, b.y])
         if (client_2 != None):
             client_2.send_message("/ball", [b.x, b.y])
-        if snd_left is not None:
-            update_sound(self.ball.x, self.ball.y, self.WIDTH, self.HEIGHT)
 
     def toggle_menu(self):
         global game_start
@@ -696,7 +734,7 @@ class Model(object):
         global paddle_2, paddle_2_direction
         global p1_activated
         global p2_activated
-        global snd_left, snd_right
+        global snd_left, snd_right, pause
         # you can change these to voice input too
         pks = self.pressed_keys
         if quit:
@@ -1068,11 +1106,12 @@ if mode == 'host':
     pyglet.app.run()
 
 if (mode == 'p1') or (mode == 'p2'):
-    sound_thread = threading.Thread(target=play_continuous_sound)
-    sound_thread.daemon = True
-    sound_thread.start()
+    sine_thread = threading.Thread(target=sine_wave)
+    sine_thread.daemon = True
+    sine_thread.start()
 
-if (mode == 'p1') or (mode == 'p2'):
+    instructions_thread = threading.Thread(target=instructions)
+    instructions_thread.daemon = True
 
     microphone_thread = threading.Thread(target=sense_microphone, args=())
     microphone_thread.daemon = True

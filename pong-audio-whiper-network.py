@@ -33,12 +33,22 @@ import sys
 from playsound import playsound
 import argparse
 from pyo import *
+import socket
 import threading
 
 from pythonosc import osc_server
 from pythonosc import dispatcher
 from pythonosc import udp_client
+import aubio
+import numpy as num
+import pyaudio
+import wave
+import soundfile as sf
+from whisper_mic.whisper_mic import WhisperMic
+from typing import Optional
 
+from pyo import pa_list_devices
+import speech_recognition as sr
 mode = ''
 debug = False
 quit = False
@@ -203,7 +213,6 @@ dispatcher_2.map("/q", on_receive_quit, "q")
 # TODO: add audio output here so that you can play the game eyes-free
 # -------------------------------------#
 #play some fun sounds?
-
 def hit():
     playsound('hit.wav', False)
 
@@ -246,10 +255,25 @@ def update_sound(ball_x, ball_y, max_x, max_y):
     snd_left.mul *= volume
     snd_right.mul *= volume
 
+def init_virtual_server():
+    p = pyaudio.PyAudio()
+    blackhole_index = None
+    for i in range(p.get_device_count()):
+        dev = p.get_device_info_by_index(i)
+        if 'BlackHole' in dev['name']:
+            blackhole_index = i
+            break
+    if blackhole_index is None:
+        raise Exception("BlackHole virtual audio device not found")
+
+    s = Server(sr=48000, nchnls=2, buffersize=512, duplex=0, audio='portaudio')
+    s.setOutputDevice(blackhole_index)
+    return s
+
 def play_continuous_sound():
     print("[Sound Manager] Thread started")
-    print("Player port: " + str(player_port))
-    s = Server().boot()
+    s = init_virtual_server()
+    s.boot()
     s.start()
     global snd_left, snd_right, game_start, quit, snd, instructions
     snd_left = Sine(freq=440, mul=0.5)
@@ -262,6 +286,64 @@ def play_continuous_sound():
         except Exception as e:
             print(f"[Sound Manager] Error: {e}")
     s.stop()
+
+def rec_audio_to_send_to_clients():
+    global player_port, host_ip
+    blackhole_index = None
+    p = pyaudio.PyAudio()
+    for i in range(p.get_device_count()):
+        dev = p.get_device_info_by_index(i)
+        if 'BlackHole' in dev['name']:
+            blackhole_index = i
+            break
+    if blackhole_index is None:
+        raise Exception("BlackHole virtual audio device not found")
+
+    stream = p.open(format=pyaudio.paInt16, channels=1, rate=48000, input=True, output=False, input_device_index=blackhole_index, frames_per_buffer=1024)
+    print("[REC AUDIO] Player port: " + str(player_port))
+    print("[REC AUDIO] Host IP: " + str(host_ip))
+
+    streaming_send_thread = threading.Thread(target=send_audio)
+    streaming_send_thread.daemon = True
+    streaming_send_thread.start()
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        print("[Server] Binding to", host_ip, "on port", player_port)
+        server_socket.bind((host_ip, player_port))
+        server_socket.listen(1)
+        print("[Server] Listening for connections...")
+        conn, addr = server_socket.accept()
+        print(f"[Server] Connected by {addr}")
+
+        while not quit:
+            data = stream.read(1024)
+            conn.sendall(data)
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+
+def send_audio():
+    global player_port, host_ip
+    p = pyaudio.PyAudio()
+    stream = p.open(format=pyaudio.paInt16,channels=1, rate=48000, output=True, frames_per_buffer=1024, output_device_index=0)
+    print("debug: found server to rec audio")
+    print("[SEND AUDIO] Player port: " + str(player_port))
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        print("[Client] Connecting to", host_ip, "on port", player_port)
+        client_socket.connect((host_ip, host_port))
+        print("[Client] Connected to server, ready to send audio")
+
+        while not quit:
+            data = client_socket.recv(1024)
+            if data:
+                stream.write(data)
+            else:
+                break
+
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
 
 if mode == 'p1':
     host_port = host_port_1
@@ -346,27 +428,19 @@ dispatcher_player.map("/p1bigpaddle", on_receive_p1_bigpaddle)
 dispatcher_player.map("/p2bigpaddle", on_receive_p2_bigpaddle)
 dispatcher_player.map("/p2bigpaddle", on_receive_p2_bigpaddle)
 dispatcher_player.map("/instructions", on_receive_instructions)
-dispatcher_player.map("/continuous_sound", play_continuous_sound)
+# -------------------------------------#
+
+# SERVER SENDING AUDIO
 # -------------------------------------#
 
 # Player: speech recognition library
 # -------------------------------------#
 # threading so that listenting to speech would not block the whole program
 # speech recognition (default using google, requiring internet)
-import speech_recognition as sr
 # -------------------------------------#
 
 # Player: pitch & volume detection
 # -------------------------------------#
-import aubio
-import numpy as num
-import pyaudio
-import wave
-import tempfile
-import soundfile as sf
-from whisper_mic.whisper_mic import WhisperMic
-from typing import Optional
-import openai
 
 # PyAudio object.
 p = pyaudio.PyAudio()
@@ -394,7 +468,7 @@ recognizer = sr.Recognizer()
 '''print("Available audio input devices:")
 for i in range(p.get_device_count()):
     dev = p.get_device_info_by_index(i)
-    if dev['maxInputChannels'] > 0:
+    if dev['maxOutputChannels'] > 0:
         print(f"Device index {i}: {dev['name']}")'''
 
 def listen_to_speech():
@@ -1098,6 +1172,10 @@ if (mode == 'p1') or (mode == 'p2'):
     player_server_thread.start()
     # -------------------------------------#
     client.send_message("/c", player_ip)
+
+    streaming_thread = threading.Thread(target=rec_audio_to_send_to_clients)
+    streaming_thread.daemon = True
+    streaming_thread.start()
 
     # manual input for debugging
     while True:

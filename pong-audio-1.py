@@ -533,10 +533,10 @@ def listen_to_speech():
             print("[speech recognition] Whisper could not understand audio")
         except sr.RequestError as e:
             print(f"[speech recognition] Could not request results from Whisper service; {e}")
-
+py = 0
 def speech_processor(command):
     global quit
-    global paddle_1, paddle_2, paddle_1_direction, paddle_2_direction
+    global paddle_1, paddle_2, paddle_1_direction, paddle_2_direction, py
     number_commands = {'one':1, 'two':2, 'three':3, 'four':4, 'five':5, 'six':6, 'seven':7, 'eight':8, 'nine':9, 'ten':10}
     if 'start' in command or 'play' in command:
         client.send_message('/g', 1)
@@ -556,10 +556,10 @@ def speech_processor(command):
         if num_com in command or str(num) in command:
             if mode == 'p1':
                 py = (num/10)*675
-                client.send_message('/p1', py)
+                client.send_message('/p1',py)
                 break
             elif mode == 'p2':
-                client.send_message('/p2', py)
+                client.send_message('/p2',py)
                 break
     if 'power' in command:
         client.send_message('/b',0)

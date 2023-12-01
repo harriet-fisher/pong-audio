@@ -373,13 +373,13 @@ def on_receive_paddle(address, *args):
         if args[0] > 250:
             volume = volume * -1
         #print("receive paddle " + str(volume))
-        #update_sinewave(pan=None, pitch=None, vol=volume)
+        update_sinewave(pan=None, pitch=None, vol=volume)
     elif args[2] == 2:
         volume = 4 - (args[1] / 675)
         if args[1] > 250:
             volume = volume * -1
         #print("receive paddle " + str(volume))
-        #update_sinewave(pan=None, pitch=None, vol=volume)
+        update_sinewave(pan=None, pitch=None, vol=volume)
 
 
 def on_receive_hitpaddle(address, *args):
@@ -537,7 +537,7 @@ def listen_to_speech():
 def speech_processor(command):
     global quit
     global paddle_1, paddle_2, paddle_1_direction, paddle_2_direction
-    number_commands = {'one':675, 'two':600, 'three':525, 'four':450, 'five':375, 'six':300, 'seven':225, 'eight':150, 'nine':75, 'ten':0}
+    number_commands = {'one':1, 'two':2, 'three':3, 'four':4, 'five':5, 'six':6, 'seven':7, 'eight':8, 'nine':9, 'ten':10}
     if 'start' in command or 'play' in command:
         client.send_message('/g', 1)
     if 'pause' in command:
@@ -553,14 +553,13 @@ def speech_processor(command):
     elif 'level three' in command or 'level 3' in command:
         client.send_message('/l', 3)
     for num_com, num in number_commands.items():
-        if num_com in command:
+        if num_com in command or str(num) in command:
             if mode == 'p1':
                 py = (num/10)*675
-                client.send_message('/p1', int(py))
+                client.send_message('/p1', py)
                 break
             elif mode == 'p2':
-                py = (num/10)*675
-                client.send_message('/p2', int(py))
+                client.send_message('/p2', py)
                 break
     if 'power' in command:
         client.send_message('/b',0)
@@ -631,7 +630,7 @@ class Model(object):
         self.level_2_key = pyglet.window.key._2
         self.level_3_key = pyglet.window.key._3
         self.instructions_key = pyglet.window.key.I
-        self.speed = 3  # in pixels per frame
+        self.speed = 4 # in pixels per frame
         self.ball_speed = self.speed #* 2.5
         self.WIDTH, self.HEIGHT = DIMENSIONS
         # STATE VARS
@@ -714,9 +713,9 @@ class Model(object):
         cross0 = (b.x < p0.x + 2*b.TO_SIDE) and (b.x_old >= p0.x + 2*b.TO_SIDE)
         cross1 = (b.x > p1.x - 2*b.TO_SIDE) and (b.x_old <= p1.x - 2*b.TO_SIDE)
         if p1_activated == 1 and power_up_type == 3:
-            bounding_1 = 25 * 6
+            bounding_1 = 25 * 5
         else: 
-            bounding_1 = 25 * 4
+            bounding_1 = 25 * 2
         if cross0 and -bounding_1 < b.y - p0.y < bounding_1:
             hit()
             if (client_1 != None):
@@ -731,9 +730,9 @@ class Model(object):
             b.vec_x = (1**2 - b.vec_y**2) ** 0.5
         else: 
             if p2_activated == 1 and power_up_type == 4:
-                bounding = 25 * 6
+                bounding = 25 * 5
             else: 
-                bounding = 25 * 4
+                bounding = 25 * 2
             if cross1 and -bounding < b.y - p1.y < bounding:
                 hit()
                 if (client_1 != None):
@@ -834,7 +833,7 @@ class Model(object):
             pks.remove(self.p2activate_key)
         if self.level_1_key in pks:
             self.level = 1
-            self.ball_speed = self.speed * 0.75
+            self.ball_speed = self.speed
             pks.remove(self.level_1_key)
         if self.level_2_key in pks:
             self.level = 2
@@ -842,7 +841,7 @@ class Model(object):
             pks.remove(self.level_2_key)
         if self.level_3_key in pks:
             self.level = 3
-            self.ball_speed = self.speed * 2.5
+            self.ball_speed = self.speed * 2
             pks.remove(self.level_3_key)
         if pyglet.window.key.R in pks and debug:
             self.reset_ball(1)
@@ -894,7 +893,7 @@ class Model(object):
                 elif p2.up_key not in pks and p2.down_key in pks:
                     p2.y += (1.5*self.speed)
             
-            if power_up_type == 1:
+            if power_up_type == 2:
                 pass
             else: 
                 if paddle_2_direction == -1:
